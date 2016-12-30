@@ -4,6 +4,7 @@ import matplotlib.pyplot as plots
 from matplotlib import cm
 from mpl_toolkits.mplot3d.axes3d import Axes3D
 from sklearn import linear_model
+from numbers import Number
 
 class ML_Table(Table):
     """Table with ML operators defined"""
@@ -39,6 +40,8 @@ class ML_Table(Table):
             np.random.seed(seed)
         return ML_Table().with_column(label, np.random.rand(n)*(hi-lo) + lo)
           
+    # Descriptive Statistics
+
     def summary(self, ops=None):
         """Generate a table corresponding to the R summary operator."""
         def FirstQu(x):
@@ -49,7 +52,8 @@ class ML_Table(Table):
             ops=[min, FirstQu, np.median, np.mean, ThirdQu, max]
         return self.stats(ops=ops)
 
-    # Common statistical machine learning operators
+    # Regression methods for data fitting
+
     def regression_1d_params(self, Y_label_or_column, x_label_or_column):
         """Return parameters of a linear model of f(x) = Y."""
         x_values = self._get_column(x_label_or_column)
@@ -110,7 +114,10 @@ class ML_Table(Table):
             return psum
         return model
 
+    # Statistics used in assessing models and understanding data
+
     def Cor_coef(self, x_column_or_label, y_column_or_label):
+        """Computer the correlation coefficient between two columns."""
         x_values = self._get_column(x_column_or_label)
         y_values = self._get_column(y_column_or_label)
         x_res = x_values - np.mean(x_values)
@@ -118,26 +125,37 @@ class ML_Table(Table):
         return np.sum(x_res * y_res) / (np.sqrt(np.sum(x_res**2)) * np.sqrt(sum(y_res**2)))
 
     def Cor(self):
-        """Create a correlation matrix as a table."""
-        Cor_tbl = Table().with_column("Param", self.labels)
-        for lbl in self.labels:
-            Cor_tbl[lbl] = [self.Cor_coef(lbl, xlbl) for xlbl in self.labels]
+        """Create a correlation matrix of numeric columns as a table."""
+        assert(self.num_rows > 0)
+        num_labels = [lbl for lbl in self.labels if isinstance(self[lbl][0], Number)]
+        tbl = self.select(num_labels)
+        Cor_tbl = Table().with_column("Param", num_labels)
+        for lbl in num_labels:
+            Cor_tbl[lbl] = [self.Cor_coef(lbl, xlbl) for xlbl in num_labels] 
         return Cor_tbl
 
     def TSS(self, y_column_or_label):
-        """Calulate the total sum of squares of observations y."""
+        """Calulate the total sum of squares of observation column y."""
         y_values = self._get_column(y_column_or_label)
         y_mean = np.mean(y_values)
         return np.sum((y_values-y_mean)**2)
 
     def RSS(self, y_column_or_label, f_column_or_label):
-        """Calulate the sum of square error of a observations y from estimate f."""
+        """Calulate the residual sum of square of observations y from estimate f."""
         y_values = self._get_column(y_column_or_label)
         f_values = self._get_column(f_column_or_label)
         return np.sum((y_values - f_values)**2)
+    
+    def MSE(self, y_column_or_label, f_column_or_label):
+        """Calulate the mean squared error of a observations y from estimate f."""
+        return self.RSS(y_column_or_label, f_column_or_label)/self.num_rows
+
+    def RSE(self, y_column_or_label, f_column_or_label):
+        """Computer the residual standard error of estimate f."""
+        return np.sqrt(self.RSS(y_column_or_label, f_column_or_label)/(self.num_rows - 2))
 
     def R2(self, y_column_or_label, f_column_or_label):
-        """Calulate the R^2 statistic of estimate f ."""
+        """Calulate the R^2 statistic of estimate of output y from f ."""
         return 1 - (self.RSS(y_column_or_label, f_column_or_label)/self.TSS(y_column_or_label))
 
     def F_stat(self, y_column_or_label, f_column_or_label, p):
@@ -148,13 +166,15 @@ class ML_Table(Table):
         tss = self.TSS(y_column_or_label)
         return ((tss-rss)/p) / (rss/(n - p - 1))
 
-    def RSE(self, y_column_or_label, f_column_or_label):
-        return np.sqrt(self.RSS(y_column_or_label, f_column_or_label)/(self.num_rows - 2))
-    
-    def MSE(self, y_column_or_label, f_column_or_label):
-        """Calulate the mean square error of a observations y from estimate f."""
-        return self.RSS(y_column_or_label, f_column_or_label)/self.num_rows
-    
+    def leverage_1d(self, x_column_or_label):
+        """Calulate the 1d leverage statistic of an input column."""
+        x_values = self._get_column(x_column_or_label)
+        x_mean = np.mean(x_values)
+        x_ss = np.sum((x_values - x_mean)**2)
+        return ((x_values - x_mean)**2)/x_ss  + (1/len(x_values))
+
+    # Common statistics from model functions
+
     def RSS_model_1d(self, y_column_or_label, model_fun, x_column_or_label):
         f_values = model_fun(self._get_column(x_column_or_label))
         return self.RSS(y_column_or_label, f_values)
@@ -276,7 +296,10 @@ class ML_Table(Table):
 
     # Visualization
 
-    def _plot_contour(f, x_lo, x_hi, y_lo, y_hi, n=20, levels=10):        
+    def _input_labels(self, output_label):
+        return [lbl for lbl in self.labels if lbl != output_label]
+
+    def _plot_contour(f, x_lo, x_hi, y_lo, y_hi, n=20, **kwargs):        
         """Helper to form contour plot of a function over a 2D domain."""
         x_step = (x_hi - x_lo)/n
         y_step = (y_hi - y_lo)/n
@@ -285,21 +308,39 @@ class ML_Table(Table):
         X, Y = np.meshgrid(x_range, y_range)
         Z = [[f(x,y) for x in x_range] for y in y_range]
         fig, ax = plots.subplots()
-        CS = ax.contour(X, Y, Z, levels)
+        CS = ax.contour(X, Y, Z, **kwargs)
         ax.clabel(CS, inline=2, fontsize=10)
         ax.grid(c='k', ls='-', alpha=0.3)
         return ax
 
-    def RSS_contour(self, Y_column_or_label, x_column_or_label, 
-                    sensitivity=0.1, n_grid=20, levels=10):
+    def RSS_contour(self, Y_column_or_label, x_column_or_label, scale=1,
+                    sensitivity=0.1, n_grid=20, **kwargs):
         """Show contour of RSS around the regression point."""
         b0, b1 = self.regression_1d_params(Y_column_or_label, x_column_or_label)
         x_values = self._get_column(x_column_or_label)
-        rss_fun = lambda b0,b1:self.RSS(Y_column_or_label, b0 + b1*x_values)
+        rss_fun = lambda b0,b1:self.RSS(Y_column_or_label, b0 + b1*x_values)*scale
         x_lo, x_hi = b0*(1-sensitivity), b0*(1+sensitivity)
         y_lo, y_hi = b1*(1-sensitivity), b1*(1+sensitivity)        
-        ax = ML_Table._plot_contour(rss_fun, x_lo, x_hi, y_lo, y_hi, n = n_grid, levels=levels)
+        ax = ML_Table._plot_contour(rss_fun, x_lo, x_hi, y_lo, y_hi, n = n_grid, **kwargs)
         ax.plot([b0], [b1], 'ro')
+        return ax
+
+    def RSS_contour2(self, output_label,
+                     x_sensitivity=0.1, y_sensitivity = 0.1, scale=1,
+                     n_grid=20, **kwargs):
+        """Show contour of RSS around the 2-input regression point."""
+        b0, coefs = self.regression_params(output_label)
+        b1, b2 = coefs
+        print(b0, b1, b2)
+        x_lbl, y_lbl = self._input_labels(output_label)
+        x_values, y_values = self[x_lbl], self[y_lbl]
+        rss_fun = lambda b1,b2:self.RSS(output_label, b0 + b1*x_values + b2*y_values)*scale
+        x_lo, x_hi = b1*(1-x_sensitivity), b1*(1+x_sensitivity)
+        y_lo, y_hi = b2*(1-y_sensitivity), b2*(1+y_sensitivity)        
+        ax = ML_Table._plot_contour(rss_fun, x_lo, x_hi, y_lo, y_hi, n = n_grid, **kwargs)
+        ax.plot([b1], [b2], 'ro')
+        ax.set_xlabel(x_lbl)
+        ax.set_ylabel(y_lbl)        
         return ax
 
     def _plot_wireframe(f, x_lo, x_hi, y_lo, y_hi, n=20, rstride=1, cstride=1):
@@ -374,22 +415,25 @@ class ML_Table(Table):
             else:
                 return axes
 
-    def plot_fit_1d(self, y_label, x_label, model_fun, **kwargs):
+    def plot_fit_1d(self, y_label, x_label, model_fun, 
+                    width=6, height=4, connect=True, **kwargs):
         """Visualize the error in f(x) = y + error."""
-        fig, ax = plots.subplots()
+        fig, ax = plots.subplots(figsize=(width, height))
         ax.scatter(self[x_label], self[y_label])
         f_tbl = self.select([x_label, y_label]).sort(x_label, descending=False)
         fun_x = f_tbl.apply(model_fun, x_label)
         ax.plot(f_tbl[x_label], fun_x, **kwargs)
-        for i in range(f_tbl.num_rows):
-            ax.plot([f_tbl[x_label][i], f_tbl[x_label][i]], 
-                    [fun_x[i], f_tbl[y_label][i] ], 'r-')
+        if connect:
+            for i in range(f_tbl.num_rows):
+                ax.plot([f_tbl[x_label][i], f_tbl[x_label][i]], 
+                        [fun_x[i], f_tbl[y_label][i] ], 'r-')
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
         return ax
 
     def plot_fit_2d(self, z_label, x_label, y_label, model_fun=None, n_mesh=50, 
                     xmin=None, xmax=None, ymin=None, ymax=None,
+                    connect=True,
                     rstride=5, cstride=5, width=6, height=4, **kwargs):
         fig = plots.figure(figsize=(width, height))
         ax = fig.add_subplot(111, projection='3d')
@@ -410,9 +454,10 @@ class ML_Table(Table):
             Z = model_fun(X, Y)
             ax.plot_surface(X, Y, Z, rstride=5, cstride=5, linewidth=1, cmap=cm.coolwarm)
             ax.plot_wireframe(X, Y, Z, rstride=5, cstride=5, linewidth=1, color='b', **kwargs)
-            for (x, y, z) in zip(self[x_label], self[y_label], self[z_label]):
-                mz = model_fun(x,y)
-                ax.plot([x,x], [y,y], [z,mz], color='black')
+            if connect:
+                for (x, y, z) in zip(self[x_label], self[y_label], self[z_label]):
+                    mz = model_fun(x,y)
+                    ax.plot([x,x], [y,y], [z,mz], color='black')
 
         ax.scatter(self[x_label], self[y_label], self[z_label], c='r', marker='o')
         ax.set_xlabel(x_label)
