@@ -1,10 +1,10 @@
 from datascience import Table
+from numbers import Number
 import numpy as np
 import matplotlib.pyplot as plots
 from matplotlib import cm
 from mpl_toolkits.mplot3d.axes3d import Axes3D
-from sklearn import linear_model
-from numbers import Number
+from sklearn import linear_model, neighbors
 
 class ML_Table(Table):
     """Table with ML operators defined"""
@@ -113,6 +113,21 @@ class ML_Table(Table):
                 psum = x*psum + c
             return psum
         return model
+
+    def knn_regression(self, output_label, **kwargs):
+        """Return a knn function trained on a ML_Table.
+
+        For kwargs and documentation see 
+        scikit-learn-docs.pdf 5.25.4 sklearn.neighbors.KNeighborsRegressor
+        class sklearn.neighbors.KNeighborsRegressor(n_neighbors=5, weights=’uniform’, 
+        algorithm=’auto’, leaf_size=30, p=2, metric=’minkowski’,
+        metric_params=None, n_jobs=1, **kwargs)
+        """
+        input_labels = self._input_labels(output_label)
+        input_tbl = self.select(input_labels)
+        knn = neighbors.KNeighborsRegressor(**kwargs)
+        knn.fit(input_tbl.rows, self[output_label])
+        return lambda *args: knn.predict([args])[0]
 
     # Statistics used in assessing models and understanding data
 
@@ -343,7 +358,8 @@ class ML_Table(Table):
         ax.set_ylabel(y_lbl)        
         return ax
 
-    def _plot_wireframe(f, x_lo, x_hi, y_lo, y_hi, n=20, rstride=1, cstride=1):
+    def _plot_wireframe(f, x_lo, x_hi, y_lo, y_hi, n=20, rstride=1, cstride=1, 
+                        x_label=None, y_label=None, z_label=None):
         x_step = (x_hi - x_lo)/n
         y_step = (y_hi - y_lo)/n
         x_range = np.arange(x_lo, x_hi, x_step)
@@ -353,8 +369,13 @@ class ML_Table(Table):
         fig = plots.figure()
         ax = fig.add_subplot(111, projection='3d')
         ax.plot_wireframe(X, Y, Z, rstride=rstride, cstride=cstride, linewidth=1, color='b')
+        if x_label is not None:
+            ax.set_xlabel(x_label)
+        if y_label is not None:
+            ax.set_xlabel(y_label)
+        if z_label is not None:
+            ax.set_xlabel(z_label)
         return ax
-
 
     def RSS_wireframe(self, Y_column_or_label, x_column_or_label, 
                       sensitivity=0.1, n_grid=20):
@@ -369,6 +390,76 @@ class ML_Table(Table):
         return ax
 
 
+    def plot_fit_1d(self, y_label, x_label, model_fun, n_mesh=50, xmin=None, xmax=None,
+                    width=6, height=4, connect=True, **kwargs):
+        """Visualize the error in f(x) = y + error."""
+        fig, ax = plots.subplots(figsize=(width, height))
+        ax.scatter(self[x_label], self[y_label])
+        f_tbl = self.select([x_label, y_label]).sort(x_label, descending=False)
+        if model_fun is not None:
+            if xmin is None:
+                xmin = min(self[x_label])
+            if xmax is None:
+                xmax = max(self[x_label])
+            xstep = (xmax-xmin)/n_mesh
+            xv = np.arange(xmin, xmax + xstep, xstep)
+            fun_x = [model_fun(x) for x in xv]
+            ax.plot(xv, fun_x, **kwargs)
+            if connect:
+                for i in range(f_tbl.num_rows):
+                    ax.plot([f_tbl[x_label][i], f_tbl[x_label][i]], 
+                            [model_fun(f_tbl[x_label][i]), f_tbl[y_label][i] ], 'r-')
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        return ax
+
+    def plot_fit_2d(self, z_label, x_label, y_label, model_fun=None, n_mesh=50, 
+                    xmin=None, xmax=None, ymin=None, ymax=None,
+                    connect=True,
+                    rstride=5, cstride=5, width=6, height=4, **kwargs):
+        fig = plots.figure(figsize=(width, height))
+        ax = fig.add_subplot(111, projection='3d')
+        if model_fun is not None:
+            if xmin is None:
+                xmin = min(self[x_label])
+            if xmax is None:
+                xmax = max(self[x_label])
+            if ymin is None:
+                ymin = min(self[y_label])
+            if ymax is None:
+                ymax = max(self[y_label])
+            xstep = (xmax-xmin)/n_mesh
+            ystep = (ymax-ymin)/n_mesh
+            xv = np.arange(xmin, xmax + xstep, xstep)
+            yv = np.arange(ymin, ymax + ystep, ystep)
+            X, Y = np.meshgrid(xv, yv)
+#            Z = model_fun(X, Y)
+            Z = [[model_fun(x,y) for x in xv] for y in yv]
+            ax.plot_surface(X, Y, Z, rstride=5, cstride=5, linewidth=1, cmap=cm.coolwarm)
+            ax.plot_wireframe(X, Y, Z, rstride=5, cstride=5, linewidth=1, color='b', **kwargs)
+            if connect:
+                for (x, y, z) in zip(self[x_label], self[y_label], self[z_label]):
+                    mz = model_fun(x,y)
+                    ax.plot([x,x], [y,y], [z,mz], color='black')
+
+        ax.scatter(self[x_label], self[y_label], self[z_label], c='r', marker='o')
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_zlabel(z_label)
+        return ax
+
+    def plot_fit(self, f_label, model_fun, width=6, height=4, **kwargs):
+        """Visualize the goodness of fit of a model."""
+        labels = [lbl for lbl in self.labels if not lbl == f_label]
+        assert len(labels) <= 2, "Too many dimensions to plot"
+        if len(labels) == 1:
+            return self.plot_fit_1d(f_label, labels[0], model_fun, **kwargs)
+        else:
+            return self.plot_fit_2d(f_label, labels[0], labels[1], model_fun, 
+                                    width=width, height=height, **kwargs)
+                    
+    # Generic Table visualization
+    
     def boxplot(self, column_for_xcats=None, select=None, height=4, width=6,  **vargs):
         """Plot box-plots for the columns in a table.
 
@@ -414,66 +505,3 @@ class ML_Table(Table):
                 return axes[0]
             else:
                 return axes
-
-    def plot_fit_1d(self, y_label, x_label, model_fun, 
-                    width=6, height=4, connect=True, **kwargs):
-        """Visualize the error in f(x) = y + error."""
-        fig, ax = plots.subplots(figsize=(width, height))
-        ax.scatter(self[x_label], self[y_label])
-        f_tbl = self.select([x_label, y_label]).sort(x_label, descending=False)
-        fun_x = f_tbl.apply(model_fun, x_label)
-        ax.plot(f_tbl[x_label], fun_x, **kwargs)
-        if connect:
-            for i in range(f_tbl.num_rows):
-                ax.plot([f_tbl[x_label][i], f_tbl[x_label][i]], 
-                        [fun_x[i], f_tbl[y_label][i] ], 'r-')
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        return ax
-
-    def plot_fit_2d(self, z_label, x_label, y_label, model_fun=None, n_mesh=50, 
-                    xmin=None, xmax=None, ymin=None, ymax=None,
-                    connect=True,
-                    rstride=5, cstride=5, width=6, height=4, **kwargs):
-        fig = plots.figure(figsize=(width, height))
-        ax = fig.add_subplot(111, projection='3d')
-        if model_fun is not None:
-            if xmin is None:
-                xmin = min(self[x_label])
-            if xmax is None:
-                xmax = max(self[x_label])
-            if ymin is None:
-                ymin = min(self[y_label])
-            if ymax is None:
-                ymax = max(self[y_label])
-            xstep = (xmax-xmin)/n_mesh
-            ystep = (ymax-ymin)/n_mesh
-            xv = np.arange(xmin, xmax + xstep, xstep)
-            yv = np.arange(ymin, ymax + ystep, ystep)
-            X, Y = np.meshgrid(xv, yv)
-            Z = model_fun(X, Y)
-            ax.plot_surface(X, Y, Z, rstride=5, cstride=5, linewidth=1, cmap=cm.coolwarm)
-            ax.plot_wireframe(X, Y, Z, rstride=5, cstride=5, linewidth=1, color='b', **kwargs)
-            if connect:
-                for (x, y, z) in zip(self[x_label], self[y_label], self[z_label]):
-                    mz = model_fun(x,y)
-                    ax.plot([x,x], [y,y], [z,mz], color='black')
-
-        ax.scatter(self[x_label], self[y_label], self[z_label], c='r', marker='o')
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.set_zlabel(z_label)
-        return ax
-
-    def plot_fit(self, f_label, model_fun, width=6, height=4, **kwargs):
-        """Visualize the goodness of fit of a model."""
-        labels = [lbl for lbl in self.labels if not lbl == f_label]
-        assert len(labels) <= 2, "Too many dimensions to plot"
-        if len(labels) == 1:
-            return self.plot_fit_1d(f_label, labels[0], model_fun, **kwargs)
-        else:
-            return self.plot_fit_2d(f_label, labels[0], labels[1], model_fun, 
-                                    width=width, height=height, **kwargs)
-                    
-
-    
